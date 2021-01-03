@@ -5,6 +5,16 @@ const Client = require('ssh2-sftp-client');
 module.exports = function (RED) {
     'use strict';
 
+    var SFTPCredentialsNode = function(config) {
+      RED.nodes.createNode(this, config);
+	  var node = this;
+      if(debug) {node.warn(config);}
+	  this.host = config.host;
+	  this.port = config.port;
+	  this.username = config.username;
+	  this.password = config.password;
+    };
+
     function SFtpNode(n) {
         RED.nodes.createNode(this, n);
         this.valid = true;
