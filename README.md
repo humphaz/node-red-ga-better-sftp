@@ -1,20 +1,49 @@
-# Introduction 
-TODO: Give a short introduction of your project. Let this section explain the objectives or the motivation behind this project. 
+# node-red-contrib-better-sftp
 
-# Getting Started
-TODO: Guide users through getting your code up and running on their own system. In this section you can talk about:
-1.	Installation process
-2.	Software dependencies
-3.	Latest releases
-4.	API references
+Better SFTP was created out of necessity for a SFTP node which 
+was fully implemented and had several options to configure algorithms.
 
-# Build and Test
-TODO: Describe and show how to build your code and run the tests. 
+Big shout out to [jyu213][https://github.com/jyu213] for creating [ssh2-sftp-client][https://github.com/jyu213/ssh2-sftp-client] to make development
+of this node easy.
 
-# Contribute
-TODO: Explain how other users and developers can contribute to make your code better. 
+Install
+-------
 
-If you want to learn more about creating good readme files then refer the following [guidelines](https://docs.microsoft.com/en-us/azure/devops/repos/git/create-a-readme?view=azure-devops). You can also seek inspiration from the below readme files:
-- [ASP.NET Core](https://github.com/aspnet/Home)
-- [Visual Studio Code](https://github.com/Microsoft/vscode)
-- [Chakra Core](https://github.com/Microsoft/ChakraCore)
+Run the following command in the root directory of your Node-RED install
+
+    npm install node-red-contrib-better-sftp
+    
+SFTP
+-------
+**List Directory** - Lists contents of `msg.payload` as a directory OR working directory on node config.
+
+**Get** - Set `msg.payload` to get the file OR working directory + file name in configuration will be used.
+
+**Put** - Set `msg.payload.data` to either the file name, buffer stream, or buffer object of the source file. 
+Set `msg.payload.filename` to the desired name of remote file. 
+If `msg.payload.filename` is not specified filename in node config will be used. 
+File contents will be uploaded to the SFTP server in the working directory specified.
+
+**Delete File** - Set `msg.payload` to the name of the file you wish to delete in the working directory.
+
+**Make Directory** - Set `msg.payload` to the name of the directory to make. If blank working directory will be used.
+
+**Remove Directory** - Set `msg.payload` to the name of the directory to remove. If blank working directory will be used.
+
+Configuration
+-------
+
+Host, username, and password are required to configure a new SFTP client.
+
+Algorithms are set to pre-defined default values. If you need to modify them see
+[ssh2-streams][https://github.com/mscdex/ssh2-streams] for more information.
+
+License
+-------
+
+See [license](https://github.com/sublime93/node-red-contrib-better-sftp/blob/master/LICENSE)
+
+
+[https://github.com/mscdex/ssh2-streams]: https://github.com/mscdex/ssh2-streams
+[https://github.com/jyu213]: https://github.com/jyu213
+[https://github.com/jyu213/ssh2-sftp-client]: https://github.com/jyu213/ssh2-sftp-client
