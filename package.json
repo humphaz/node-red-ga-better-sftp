@@ -1,5 +1,5 @@
 {
-  "name": "node-red-contrib-better-sftp",
+  "name": "node-red-ga-better-sftp",
   "version": "0.0.12",
   "description": "A better node for SFTP communication.",
   "main": "transports/sftp/index.js",
