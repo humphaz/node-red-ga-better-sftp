@@ -1,4 +1,4 @@
-# node-red-contrib-better-sftp
+# node-red-ga-better-sftp
 
 Better SFTP was created out of necessity for a SFTP node which 
 was fully implemented and had several options to configure algorithms.
@@ -11,11 +11,12 @@ Install
 
 Run the following command in the root directory of your Node-RED install
 
-    npm install node-red-contrib-better-sftp
+    npm install node-red-ga-better-sftp
     
 SFTP
 -------
 **List Directory** - Lists contents of `msg.payload` as a directory OR working directory on node config.
+This has been fixed now.
 
 **Get** - Set `msg.payload` to get the file OR working directory + file name in configuration will be used.
 
