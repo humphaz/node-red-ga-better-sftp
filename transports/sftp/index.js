@@ -214,5 +214,6 @@ module.exports = function (RED) {
             }
         });
     }
+    RED.nodes.registerType("SFTP-credentials", SFTPCredentialsNode);
     RED.nodes.registerType('sftp in', SFtpInNode);
 };
