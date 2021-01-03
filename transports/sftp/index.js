@@ -8,7 +8,7 @@ module.exports = function (RED) {
     var SFTPCredentialsNode = function(config) {
       RED.nodes.createNode(this, config);
 	  var node = this;
-      if(debug) {node.warn(config);}
+      //if(debug) {node.warn(config);}
 	  this.host = config.host;
 	  this.port = config.port;
 	  this.username = config.username;
