@@ -139,7 +139,8 @@ module.exports = function (RED) {
 
                         switch (node.operation) {
                             case 'list':
-                                let fileListing = await sftp.list(node.workdir);
+                                let listDirName = (msg.payload) ? msg.payload : node.workdir;
+                                let fileListing = await sftp.list(listDirName);
                                 msg.payload = fileListing;
                                 node.send(msg);
                                 break;
