@@ -1,3 +1,8 @@
+# To Do 
+
+Must add in functionality for all SFTP to be able to parameter which server. The Server allocation must be a unique name 
+and not just use the site name. This is so we can use multiple users.
+
 # node-red-ga-better-sftp
 
 Better SFTP was created out of necessity for a SFTP node which 
