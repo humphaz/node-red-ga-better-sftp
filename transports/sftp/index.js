@@ -97,7 +97,7 @@ module.exports = function (RED) {
             }
 
             let sftp = new Client();
-            node.status({ fill: "blue", shape: "dot", text: 'aetup' });
+            node.status({ fill: "blue", shape: "dot", text: 'setup' });
             try {
                 node.workdir = msg.workdir || node.workdir || "./";
                 node.localFilename = msg.localFilename || node.localFilename || "";
@@ -107,7 +107,7 @@ module.exports = function (RED) {
                 node.sftpConfig.options.port = msg.port || node.sftpConfig.options.port;
                 node.sftpConfig.options.username = msg.user || node.sftpConfig.credentials.username || '';
                 node.sftpConfig.options.password = msg.password || node.sftpConfig.credentials.password || '';
-                /*
+                
                 node.sftpConfig.options.tryKeyboard = node.sftpConfig.options.tryKeyboard || false;
                 node.sftpConfig.options.keydata = node.sftpConfig.key || '';
                 node.sftpConfig.options.passphrase = node.sftpConfig.credentials.passphrase || '';
@@ -116,7 +116,7 @@ module.exports = function (RED) {
                 node.sftpConfig.options.algorithms_serverHostKey = node.sftpConfig.options.algorithms_serverHostKey || 'ssh-rsa,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521';
                 node.sftpConfig.options.algorithms_hmac = node.sftpConfig.options.algorithms_hmac || 'hmac-sha2-256,hmac-sha2-512,hmac-sha1';
                 node.sftpConfig.options.algorithms_compress = node.sftpConfig.options.algorithms_compress || 'none,zlib@openssh.com,zlib';
-                */
+                
 
                 let conSettings = {
                     host: node.sftpConfig.options.host,
@@ -128,7 +128,7 @@ module.exports = function (RED) {
                     tryKeyboard: node.sftpConfig.options.tryKeyboard,
                 };
 
-                /*
+                
                 conSettings.algorithms = {
                     kex: node.sftpConfig.options.algorithms_kex.split(','),
                     cipher: node.sftpConfig.options.algorithms_cipher.split(','),
@@ -136,7 +136,7 @@ module.exports = function (RED) {
                     hmac: node.sftpConfig.options.algorithms_hmac.split(','),
                     compress: node.sftpConfig.options.algorithms_compress.split(',')
                 };
-                */
+                
 
                 return new Promise(async function (resolve, reject) {
                     try {
@@ -148,7 +148,7 @@ module.exports = function (RED) {
                         }
 
                         // Connect to sftp server
-                        node.status({ fill: "blue", shape: "dot", text: 'connecting' });
+                        node.status({ fill: "blue", shape: "dot", text: 'connect' });
                         await sftp.connect(conSettings);
                         node.status({ fill: 'green', shape: 'dot', text: 'connected' });
 
