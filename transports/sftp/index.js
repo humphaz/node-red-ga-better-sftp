@@ -125,8 +125,8 @@ module.exports = function (RED) {
                     password: node.sftpConfig.options.password,
                     privateKey: node.sftpConfig.options.keydata,
                     passphrase: node.sftpConfig.options.passphrase,
-                    tryKeyboard: node.sftpConfig.options.tryKeyboard
-//                    debug: console.log
+                    tryKeyboard: node.sftpConfig.options.tryKeyboard,
+                    debug: console.log
                 };
 
                 
