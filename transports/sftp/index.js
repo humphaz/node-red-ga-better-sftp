@@ -13,6 +13,7 @@ module.exports = function (RED) {
 	  this.port = config.port;
 	  this.username = config.username;
 	  this.password = config.password;
+      this.connected_ftp_source = null;
     };
 
     function SFtpNode(n) {
@@ -96,7 +97,17 @@ module.exports = function (RED) {
                 }
             }
 
-            let sftp = new Client();
+            let sftp;
+
+            if ( node.sftpConfig.credentials.connected_ftp_source === null)
+`           {
+                sftp = new Client();
+            }
+            else
+            {
+                sftp = node.sftpConfig.credentials.connected_ftp_source;
+            }
+            
             node.status({ fill: "blue", shape: "dot", text: 'setup' });
             try {
                 node.workdir = msg.workdir || node.workdir || "./";
