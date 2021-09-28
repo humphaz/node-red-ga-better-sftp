@@ -13,6 +13,7 @@ module.exports = function (RED) {
 	  this.port = config.port;
 	  this.username = config.username;
 	  this.password = config.password;
+      this.connected_ftp_source = null;
     };
 
     function SFtpNode(n) {
@@ -96,8 +97,19 @@ module.exports = function (RED) {
                 }
             }
 
-            let sftp = new Client();
-            
+            let sftp = null;
+
+            if (( node.sftpConfig.credentials.connected_ftp_source === null ) || ( node.sftpConfig.credentials.connected_ftp_source === undefined ))
+            {
+                node.warn("new Client");
+                sftp = new Client();
+            }
+            else
+            {
+                node.warn("OLD Client");
+                sftp = node.sftpConfig.credentials.connected_ftp_source;
+            }
+      
             node.status({ fill: "blue", shape: "dot", text: 'setup' });
             try {
                 node.workdir = msg.workdir || node.workdir || "./";
@@ -126,8 +138,8 @@ module.exports = function (RED) {
                     password: node.sftpConfig.options.password,
                     privateKey: node.sftpConfig.options.keydata,
                     passphrase: node.sftpConfig.options.passphrase,
-                    tryKeyboard: node.sftpConfig.options.tryKeyboard,
-                    debug: console.log
+                    tryKeyboard: node.sftpConfig.options.tryKeyboard
+                    //,debug: console.log
                 };
 
                 
@@ -150,11 +162,26 @@ module.exports = function (RED) {
                         }
 
                         // Connect to sftp server
-                        node.status({ fill: "blue", shape: "dot", text: 'connect' });
-                        await sftp.connect(conSettings);
+                        if (( node.sftpConfig.credentials.connected_ftp_source === null ) || ( node.sftpConfig.credentials.connected_ftp_source === undefined ))
+                        {
+                            //node.warn("Connecting");
+                            // Connect to sftp server
+                            node.status({ fill: "blue", shape: "dot", text: 'connect' });
+                            await sftp.connect(conSettings);
+                        }
+                        
                         node.status({ fill: 'green', shape: 'dot', text: 'connected' });
 
                         switch (node.operation) {
+                            case 'open':
+                                node.warn("Open");
+                                node.sftpConfig.credentials.connected_ftp_source = sftp;
+                                node.send(msg);
+                                break;
+                            case 'close':
+                                node.sftpConfig.credentials.connected_ftp_source = null;
+                                node.send(msg);
+                                break;
                             case 'list':
                                 let listDirName = (msg.payload) ? msg.payload : node.workdir;
                                 let fileListing = await sftp.list(listDirName);
@@ -211,8 +238,11 @@ module.exports = function (RED) {
                         handleError(err, msg);
                         reject(err);
                     } finally {
-                        sftp.client.end();
-                        sftp.end();
+                        if (( node.sftpConfig.credentials.connected_ftp_source === null ) || ( node.sftpConfig.credentials.connected_ftp_source === undefined ))
+                        {
+                            sftp.client.end();
+                            sftp.end();
+                        }
                         node.status({});
                     }
                 });
