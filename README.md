@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # To Do 
 
 Must add in functionality for all SFTP to be able to parameter which server. The Server allocation must be a unique name 
@@ -53,3 +54,7 @@ See [license](https://github.com/sublime93/node-red-contrib-better-sftp/blob/mas
 [https://github.com/mscdex/ssh2-streams]: https://github.com/mscdex/ssh2-streams
 [https://github.com/jyu213]: https://github.com/jyu213
 [https://github.com/jyu213/ssh2-sftp-client]: https://github.com/jyu213/ssh2-sftp-client
+=======
+# node-red-ga-better-sftp
+node red sftp functionality that has been improved
+>>>>>>> 3e89b93493fd5c2151f337a95dfc7c1fd14b1419
