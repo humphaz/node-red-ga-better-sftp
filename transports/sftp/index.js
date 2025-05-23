@@ -1,256 +1,184 @@
-const fs = require('fs');
+// index.js — log every path decision & strip leading '/'
+// Works with ssh2-sftp-client ≥ v11 and Node 18+
+
+const fs   = require('fs');
 const path = require('path');
-const Client = require('ssh2-sftp-client');
+const SFTP = require('ssh2-sftp-client');
 
 module.exports = function (RED) {
-    'use strict';
+  'use strict';
 
-    var SFTPCredentialsNode = function(config) {
-      RED.nodes.createNode(this, config);
-	  var node = this;
-      //if(debug) {node.warn(config);}
-	  this.host = config.host;
-	  this.port = config.port;
-	  this.username = config.username;
-	  this.password = config.password;
-      this.connected_ftp_source = null;
-    };
+  /*****************************************************************
+   * CONFIG NODE (stores credentials + a reusable SFTP connection) *
+   *****************************************************************/
+  function SFTPCredentialsNode (config) {
+    RED.nodes.createNode(this, config);
+    this.host      = config.host;
+    this.port      = config.port;
+    this.username  = config.username;
+    this.password  = config.password;
+    this.key       = config.key;
+    this._client   = null; // shared connection if you choose
+  }
 
-    function SFtpNode(n) {
-        RED.nodes.createNode(this, n);
-        this.valid = true;
-        var keyPath = "";
-        if (n.key) keyPath = n.key.trim();
+  const credSchema = {
+    credentials: {
+      username:   { type: 'text'     },
+      password:   { type: 'password' },
+      keydata:    { type: 'text'     },
+      passphrase: { type: 'password' }
+    }
+  };
 
-        if (keyPath.length > 0) {
-            try {
-                if (keyPath) {
-                    this.key = fs.readFileSync(keyPath);
-                }
-            } catch (err) {
-                this.valid = false;
-                this.error(err.toString());
-                return;
-            }
-        } else {
-            if (this.credentials) {
-                var keyData = this.credentials.keydata || "";
+  RED.nodes.registerType('SFTP-credentials', SFTPCredentialsNode, credSchema);
+  RED.nodes.registerType('sftp',               SFTPCredentialsNode, credSchema); // alias
 
-                if (keyData) {
-                    this.key = keyData;
-                }
-            }
-        }
+  /************************************
+   * MAIN IN/OUT NODE                 *
+   ************************************/
+  function SFtpInNode (n) {
+    RED.nodes.createNode(this, n);
 
-        this.options = {
-            host: n.host || 'localhost',
-            port: n.port || 22,
-            tryKeyboard: n.tryKeyboard || false,
-            algorithms_kex: n.algorithms_kex,
-            algorithms_cipher: n.algorithms_cipher,
-            algorithms_serverHostKey: n.algorithms_serverHostKey,
-            algorithms_hmac: n.algorithms_hmac,
-            algorithms_compress: n.algorithms_compress
-        };
+    const node = this;
+    node.operation     = n.operation     || 'list';
+    node.filename      = n.filename      || '';
+    node.localFilename = n.localFilename || '';
+    node.workdir       = n.workdir       || '.';
+    node.cfg           = RED.nodes.getNode(n.sftp);
+
+    if (!node.cfg) {
+      node.error('SFTP: configuration node missing');
+      return;
     }
 
-    RED.nodes.registerType('sftp', SFtpNode, {
-        credentials: {
-            username: { type: "text" },
-            password: { type: "password" },
-            keydata: { type: "text" },
-            passphrase: { type: "password" }
-        },
+    node.on('input', async (msg, send, done) => {
+      const settings = {
+        host:       msg.host       || node.cfg.host || 'localhost',
+        port:       msg.port       || node.cfg.port || 22,
+        username:   msg.user       || node.cfg.username || node.cfg.credentials.username,
+        password:   msg.password   || node.cfg.password || node.cfg.credentials.password,
+        key:        msg.key        || node.cfg.key      || node.cfg.credentials.keydata,
+        passphrase: msg.passphrase || node.cfg.credentials.passphrase,
+        tryKeyboard: n.tryKeyboard || false
+      };
+
+      const conOpts = {
+        host: settings.host,
+        port: settings.port,
+        username: settings.username,
+        password: settings.password,
+        tryKeyboard: settings.tryKeyboard,
+        debug: t => node.warn(`[ssh2] ${t}`)
+      };
+      if (settings.key)        conOpts.privateKey = settings.key;
+      if (settings.passphrase) conOpts.passphrase = settings.passphrase;
+
+      /* Connect or reuse */
+      let sftp = node.cfg._client;
+      if (!sftp) {
+        node.warn(`[flow] connecting to ${conOpts.username}@${conOpts.host}:${conOpts.port}`);
+        node.status({ fill: 'blue', shape: 'dot', text: 'connect' });
+        sftp = new SFTP();
+        await sftp.connect(conOpts);
+        node.cfg._client = sftp;
+        node.status({});
+      }
+
+      const posixJoin = (...a) => path.posix.join(...a);
+
+      try {
+        const workdir  = msg.workdir  || node.workdir || '.';
+        const inFile   = msg.filename || node.filename;
+        const prevDir  = await sftp.cwd();
+
+        node.warn(`[paths] prevDir=${prevDir} workdir=${workdir} filename=${inFile}`);
+
+        switch (node.operation) {
+          case 'put': {
+            /* Ensure directory exists */
+            if (workdir !== '.' && workdir !== prevDir) {
+              try { await sftp.mkdir(workdir, true); node.warn(`[put] ensured dir ${workdir}`); } catch (e) { node.warn(`[put] mkdir skipped: ${e.message}`); }
+            }
+
+            node.status({ fill: 'yellow', shape: 'dot', text: 'uploading' });
+
+            let uploadSrc   = msg.payload;
+            let remoteFile  = posixJoin(workdir, inFile);
+            let expectedSz  = null; // compare after upload
+
+            // Legacy {filename,data}
+            if (uploadSrc && typeof uploadSrc === 'object' && 'data' in uploadSrc) {
+              if (uploadSrc.filename) remoteFile = posixJoin(workdir, uploadSrc.filename);
+              uploadSrc = uploadSrc.data;
+              node.warn('[put] legacy {filename,data} detected');
+            }
+
+            // Strip leading '/'
+            if (remoteFile.startsWith('/')) {
+              node.warn(`[put] stripping leading / → ${remoteFile.slice(1)}`);
+              remoteFile = remoteFile.slice(1);
+            }
+
+            // Decide source type & calculate size
+            if (typeof uploadSrc === 'string') {
+              if (fs.existsSync(uploadSrc)) {
+                expectedSz = fs.statSync(uploadSrc).size;
+              } else {
+                node.warn('[put] treating string as content, not path');
+                expectedSz = Buffer.byteLength(uploadSrc);
+                uploadSrc  = Buffer.from(uploadSrc, 'utf8');
+              }
+            } else if (Buffer.isBuffer(uploadSrc)) {
+              expectedSz = uploadSrc.length;
+            } else if (uploadSrc && typeof uploadSrc.pipe === 'function') {
+              // stream – size unknown
+            } else if (msg.localPath) {
+              expectedSz = fs.statSync(msg.localPath).size;
+            }
+
+            node.warn(`[put] final remote path = ${remoteFile}  (expect ${expectedSz ?? 'unknown'} bytes)`);
+
+            // === perform the upload ===
+            await sftp.put(uploadSrc || msg.localPath, remoteFile, { rejectOnError: true });
+
+            /* Verify upload by stat */
+            try {
+              const rStat = await sftp.stat(remoteFile);
+              node.warn(`[put] remote size = ${rStat.size}`);
+              if (expectedSz !== null && rStat.size !== expectedSz) {
+                throw new Error(`size mismatch: expected ${expectedSz}, got ${rStat.size}`);
+              }
+              node.status({}); // clear
+              msg.payload = { ok: true, path: remoteFile, size: rStat.size };
+            } catch (verifyErr) {
+              node.status({ fill: 'red', shape: 'ring', text: 'failed' });
+              node.warn(`[put] verify failed: ${verifyErr.message}`);
+              throw verifyErr;
+            }
+            break; }
+
+          case 'list':   msg.payload = await sftp.list(workdir); break;
+          case 'get':    msg.payload = await sftp.get(posixJoin(workdir, inFile)); break;
+          case 'delete': await sftp.delete(posixJoin(workdir, inFile)); msg.payload={deleted:inFile}; break;
+          case 'mkdir':  await sftp.mkdir(workdir, false); msg.payload={created:workdir}; break;
+          case 'rmdir':  await sftp.rmdir(workdir, false); msg.payload={removed:workdir}; break;
+          case 'close':  await sftp.end(); node.cfg._client=null; msg.payload={closed:true}; break;
+          default: throw new Error(`unknown op ${node.operation}`);
+        }
+
+        send(msg); done && done();
+      } catch (err) {
+        node.status({ fill: 'red', shape: 'ring', text: 'error' });
+        node.warn(`[error] ${err.message}`);
+        node.error(err, msg); done && done(err);
+      }
     });
+  }
 
-    function SFtpInNode(n) {
-        RED.nodes.createNode(this, n);
-        this.sftp = n.sftp;
-        this.operation = n.operation;
-        this.filename = n.filename;
-        this.localFilename = n.localFilename;
-        this.workdir = n.workdir;
-        this.sftpConfig = RED.nodes.getNode(this.sftp);
-
-        // Validate config exists
-        if (!this.sftpConfig) {
-            this.error('No configuration found. Please validate configuration.');
-            return;
-        }
-
-        // Validate credentials are present.
-        if (!this.sftpConfig.credentials.username || this.sftpConfig.credentials.username === '') {
-            this.error('Username not present. Make sure username is defined in server configuration.');
-            return;
-        }
-
-        let node = this;
-        node.on('input', function (msg, send, done) {
-
-            function handleError(error, msg) {
-                if (done) {
-                    // Node-RED 1.0 compatible
-                    done(error);
-                } else {
-                    // Node-RED 0.x compatible
-                    node.error(error, msg);
-                }
-            }
-
-            let sftp = null;
-
-            if (( node.sftpConfig.credentials.connected_ftp_source === null ) || ( node.sftpConfig.credentials.connected_ftp_source === undefined ))
-            {
-                node.warn("new Client");
-                sftp = new Client();
-            }
-            else
-            {
-                node.warn("OLD Client");
-                sftp = node.sftpConfig.credentials.connected_ftp_source;
-            }
-      
-            node.status({ fill: "blue", shape: "dot", text: 'setup' });
-            try {
-                node.workdir = msg.workdir || node.workdir || "./";
-                node.localFilename = msg.localFilename || node.localFilename || "";
-
-                /* SFTP options */
-                node.sftpConfig.options.host = msg.host || node.sftpConfig.options.host;
-                node.sftpConfig.options.port = msg.port || node.sftpConfig.options.port;
-                node.sftpConfig.options.username = msg.user || node.sftpConfig.credentials.username || '';
-                node.sftpConfig.options.password = msg.password || node.sftpConfig.credentials.password || '';
-                
-                node.sftpConfig.options.tryKeyboard = node.sftpConfig.options.tryKeyboard || false;
-                node.sftpConfig.options.keydata = node.sftpConfig.key || '';
-                node.sftpConfig.options.passphrase = node.sftpConfig.credentials.passphrase || '';
-                node.sftpConfig.options.algorithms_kex = node.sftpConfig.options.algorithms_kex || 'ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha1';
-                node.sftpConfig.options.algorithms_cipher = node.sftpConfig.options.algorithms_cipher || 'aes128-ctr,aes192-ctr,aes256-ctr,aes128-gcm,aes128-gcm@openssh.com,aes256-gcm,aes256-gcm@openssh.com';
-                node.sftpConfig.options.algorithms_serverHostKey = node.sftpConfig.options.algorithms_serverHostKey || 'ssh-rsa,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521';
-                node.sftpConfig.options.algorithms_hmac = node.sftpConfig.options.algorithms_hmac || 'hmac-sha2-256,hmac-sha2-512,hmac-sha1';
-                node.sftpConfig.options.algorithms_compress = node.sftpConfig.options.algorithms_compress || 'none,zlib@openssh.com,zlib';
-                
-
-                let conSettings = {
-                    host: node.sftpConfig.options.host,
-                    port: node.sftpConfig.options.port,
-                    username: node.sftpConfig.options.username,
-                    password: node.sftpConfig.options.password,
-                    privateKey: node.sftpConfig.options.keydata,
-                    passphrase: node.sftpConfig.options.passphrase,
-                    tryKeyboard: node.sftpConfig.options.tryKeyboard
-                    //,debug: console.log
-                };
-
-                
-                conSettings.algorithms = {
-                    kex: node.sftpConfig.options.algorithms_kex.split(','),
-                    cipher: node.sftpConfig.options.algorithms_cipher.split(','),
-                    serverHostKey: node.sftpConfig.options.algorithms_serverHostKey.split(','),
-                    hmac: node.sftpConfig.options.algorithms_hmac.split(','),
-                    compress: node.sftpConfig.options.algorithms_compress.split(',')
-                };
-                
-
-                return new Promise(async function (resolve, reject) {
-                    try {
-                        // Try password interative
-                        if(conSettings.tryKeyboard === true) {
-                            sftp.on('keyboard-interactive', function(name, instructions, instructionsLang, prompts, finish) {
-                                finish([conSettings.password]);
-                            })
-                        }
-
-                        // Connect to sftp server
-                        if (( node.sftpConfig.credentials.connected_ftp_source === null ) || ( node.sftpConfig.credentials.connected_ftp_source === undefined ))
-                        {
-                            //node.warn("Connecting");
-                            // Connect to sftp server
-                            node.status({ fill: "blue", shape: "dot", text: 'connect' });
-                            await sftp.connect(conSettings);
-                        }
-                        
-                        node.status({ fill: 'green', shape: 'dot', text: 'connected' });
-
-                        switch (node.operation) {
-                            case 'open':
-                                node.warn("Open");
-                                node.sftpConfig.credentials.connected_ftp_source = sftp;
-                                node.send(msg);
-                                break;
-                            case 'close':
-                                node.sftpConfig.credentials.connected_ftp_source = null;
-                                node.send(msg);
-                                break;
-                            case 'list':
-                                let listDirName = (msg.payload) ? msg.payload : node.workdir;
-                                let fileListing = await sftp.list(listDirName);
-                                msg.payload = fileListing;
-                                node.send(msg);
-                                break;
-                            case 'get':
-                                let getFtpFileName = path.join(node.workdir, node.filename);
-                                if (msg.payload) getFtpFileName = msg.payload;
-
-                                let fileBytes = await sftp.get(getFtpFileName);
-                                msg.payload = fileBytes;
-                                node.send(msg);
-                                break;
-                            case 'put':
-                                let putFtpFileName = path.join(node.workdir, node.filename);
-                                if (msg.payload.filename) putFtpFileName = path.join(node.workdir, msg.payload.filename);
-
-                                let put = await sftp.put(msg.payload.data, putFtpFileName);
-
-                                msg.payload = put;
-                                node.send(msg);
-                                break;
-                            case 'delete':
-                                let delFtpFileName = path.join(node.workdir, node.filename);
-                                if (msg.payload) delFtpFileName = msg.payload;
-                                let del = await sftp.delete(delFtpFileName);
-                                msg.payload = del;
-                                node.send(msg);
-                                break;
-                            case 'mkdir':
-                                let mkDirName = (msg.payload) ? msg.payload : node.workdir;
-                                let mkdir = await sftp.mkdir(mkDirName, false);
-                                msg.payload = mkdir;
-                                node.send(msg);
-                                break;
-                            case 'rmdir':
-                                let rmDirName = (msg.payload) ? msg.payload : node.workdir;
-                                let rmdir = await sftp.rmdir(rmDirName, false);
-                                msg.payload = rmdir;
-                                node.send(msg);
-                                break;
-                            default:
-                                node.status({ fill: 'red', shape: 'ring', text: 'failed' });
-                                node.error('Invalid operation');
-                                reject('Invalid operation');
-                                break;
-                        }
-
-                        node.status({ fill: 'gray', shape: 'ring', text: 'done!' });
-                        resolve('success');
-                    } catch (err) {
-                        node.status({ fill: 'red', shape: 'ring', text: 'failed' });
-                        handleError(err, msg);
-                        reject(err);
-                    } finally {
-                        if (( node.sftpConfig.credentials.connected_ftp_source === null ) || ( node.sftpConfig.credentials.connected_ftp_source === undefined ))
-                        {
-                            sftp.client.end();
-                            sftp.end();
-                        }
-                        node.status({});
-                    }
-                });
-            } catch (error) {
-                handleError(error, msg);
-            }
-        });
+  RED.nodes.registerType('sftp in', SFtpInNode, {
+    credentials: {
+      username: { type: 'text' },
+      password: { type: 'password' }
     }
-    RED.nodes.registerType("SFTP-credentials", SFTPCredentialsNode);
-    RED.nodes.registerType('sftp in', SFtpInNode);
+  });
 };
