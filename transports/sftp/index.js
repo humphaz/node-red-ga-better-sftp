@@ -1,5 +1,6 @@
-/* index.js – Node-RED SFTP node  (cwd, upload, restore, toggleable logging) */
-/* Toggle verbose logs:  export SFTP_VERBOSE=1  */
+/* index.js – Node-RED SFTP node  (cwd, upload, restore, toggleable logging)
+   Toggle verbose logs:  export SFTP_VERBOSE=1
+*/
 
 const fs   = require('fs');
 const path = require('path');
@@ -9,7 +10,6 @@ module.exports = function (RED) {
   'use strict';
 
   const VERBOSE = /^1|true$/i.test(process.env.SFTP_VERBOSE || '');
-
   function log(node, msg) { if (VERBOSE) node.warn(msg); }
 
   /* ───────────── CONFIG NODE ───────────── */
@@ -20,7 +20,7 @@ module.exports = function (RED) {
     this.username = cfg.username;
     this.password = cfg.password;
     this.key      = cfg.key;
-    this._client  = null;                // shared connection
+    this._client  = null;                 // shared connection instance
   }
 
   const credSchema = {
@@ -33,7 +33,7 @@ module.exports = function (RED) {
   };
 
   RED.nodes.registerType('SFTP-credentials', SFTPCredentials, credSchema);
-  RED.nodes.registerType('sftp', SFTPCredentials, credSchema);          // alias
+  RED.nodes.registerType('sftp',              SFTPCredentials, credSchema);  // alias
 
   /* ───────────── FLOW NODE ───────────── */
   function SFtpNode(n) {
@@ -47,6 +47,7 @@ module.exports = function (RED) {
 
     if (!node.cfg) { node.error('SFTP: configuration node missing'); return; }
 
+    /* ----- runtime input handler ----- */
     node.on('input', async (msg, send, done) => {
       const opts = {
         host:     msg.host     || node.cfg.host     || 'localhost',
@@ -55,14 +56,17 @@ module.exports = function (RED) {
         password: msg.password || node.cfg.password || node.cfg.credentials.password,
         debug:    t => log(node, `[ssh2] ${t}`)
       };
-      if (msg.key || node.cfg.key || node.cfg.credentials.keydata)
+      if (msg.key || node.cfg.key || node.cfg.credentials.keydata) {
         opts.privateKey = msg.key || node.cfg.key || node.cfg.credentials.keydata;
-      if (node.cfg.credentials.passphrase)
-        opts.passphrase = node.cfg.credentials.passphrase;
+      }
+      if (node.cfg.credentials.passphrase) opts.passphrase = node.cfg.credentials.passphrase;
 
-      /* connect (reuse) */
+      /* connect (reuse if present) */
       let sftp = node.cfg._client;
       if (!sftp) {
+        if (node.operation !== 'open') {
+          node.error('No active SFTP session – perform an "open" first.'); return;
+        }
         node.status({ fill: 'blue', shape: 'dot', text: 'connect' });
         log(node, `[flow] connecting to ${opts.username}@${opts.host}:${opts.port}`);
         sftp = new SFTP();
@@ -74,13 +78,13 @@ module.exports = function (RED) {
       try {
         const workdir = msg.workdir || node.workdir || '.';
         let   rFile   = msg.filename || node.filename;
-        const prevDir = await sftp.cwd();               // save current dir
+        const prevDir = await sftp.cwd();          // remember current dir
         log(node, `[paths] prevDir=${prevDir} workdir=${workdir} filename=${rFile}`);
 
         /* ────────── PUT ────────── */
         if (node.operation === 'put') {
           let src = msg.payload;
-          if (src && typeof src === 'object' && 'data' in src) { // legacy
+          if (src && typeof src === 'object' && 'data' in src) {   // legacy structure
             if (src.filename) rFile = src.filename;
             src = src.data;
             log(node, '[put] legacy {filename,data} detected');
@@ -88,14 +92,14 @@ module.exports = function (RED) {
           if (rFile.startsWith('/')) rFile = rFile.slice(1);
 
           await sftp.mkdir(workdir, true).catch(() => {});
-          await sftp.cwd(workdir);                       // cd into target dir
+          await sftp.cwd(workdir);
 
-          const expect =
+          const expected =
             typeof src === 'string' && fs.existsSync(src) ? fs.statSync(src).size :
             Buffer.isBuffer(src)                          ? src.length            :
                                                             null;
 
-          log(node, `[put] uploading → ${rFile} (expect ${expect ?? 'unknown'} bytes)`);
+          log(node, `[put] uploading → ${rFile} (${expected ?? 'unknown'} bytes)`);
           node.status({ fill: 'yellow', shape: 'dot', text: 'uploading' });
 
           if (typeof src === 'string' && fs.existsSync(src)) {
@@ -105,28 +109,56 @@ module.exports = function (RED) {
           }
 
           const st = await sftp.stat(rFile).catch(() => ({ size: -1 }));
-          log(node, `[put] remote size = ${st.size}`);
-          if (expect !== null && st.size !== expect)
-            throw new Error(`size mismatch: expected ${expect}, got ${st.size}`);
+          if (expected !== null && st.size !== expected) {
+            throw new Error(`size mismatch: expected ${expected}, got ${st.size}`);
+          }
 
           msg.payload = { ok: true, path: path.posix.join(workdir, rFile), size: st.size };
           node.status({});
-
-          await sftp.cwd(prevDir);                       // restore dir
+          await sftp.cwd(prevDir);
           send(msg); done && done();
           return;
         }
 
-        /* ───── other operations ───── */
+        /* ────────── OTHER OPS ────────── */
         const p = x => path.posix.join(workdir, x);
         switch (node.operation) {
-          case 'list':   msg.payload = await sftp.list(workdir); break;
-          case 'get':    msg.payload = await sftp.get(p(rFile)); break;
-          case 'delete': await sftp.delete(p(rFile)); msg.payload={deleted:rFile}; break;
-          case 'mkdir':  await sftp.mkdir(workdir, false); msg.payload={created:workdir}; break;
-          case 'rmdir':  await sftp.rmdir(workdir, false); msg.payload={removed:workdir}; break;
-          case 'close':  await sftp.end(); node.cfg._client=null; msg.payload={closed:true}; break;
-          default:       throw new Error(`unknown op ${node.operation}`);
+          case 'list':
+            msg.payload = await sftp.list(workdir);
+            break;
+
+          case 'get':
+            msg.payload = await sftp.get(p(rFile));
+            break;
+
+          case 'delete':
+            await sftp.delete(p(rFile));
+            msg.payload = { deleted: rFile };
+            break;
+
+          case 'mkdir':
+            await sftp.mkdir(workdir, false);
+            msg.payload = { created: workdir };
+            break;
+
+          case 'rmdir':
+            await sftp.rmdir(workdir, false);
+            msg.payload = { removed: workdir };
+            break;
+
+          case 'open':
+            /* payload untouched → passes through */
+            log(node, '[open] connection established / reused');
+            break;
+
+          case 'close':
+            await sftp.end();
+            node.cfg._client = null;
+            if (msg.payload === undefined) msg.payload = { closed: true };
+            break;
+
+          default:
+            throw new Error(`Unknown operation "${node.operation}"`);
         }
 
         send(msg); done && done();
@@ -136,9 +168,17 @@ module.exports = function (RED) {
         node.error(err, msg); done && done(err);
       }
     });
+
+    /* tidy up on redeploy or node deletion */
+    node.on('close', (removed, doneClose) => {
+      const client = node.cfg && node.cfg._client;
+      if (client) {
+        client.end().finally(() => { node.cfg._client = null; doneClose(); });
+      } else doneClose();
+    });
   }
 
   RED.nodes.registerType('sftp in', SFtpNode, {
-    credentials: { username:{type:'text'}, password:{type:'password'} }
+    credentials: { username: { type: 'text' }, password: { type: 'password' } }
   });
 };
